@@ -1,6 +1,5 @@
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 from pathlib import Path
 import plotly.express as px
 from io import BytesIO
@@ -15,7 +14,6 @@ CORES_AREA = {
     "LC": "#EC4899",
     "MT": "#F59E0B",
 }
-
 
 st.set_page_config(
     page_title="Simulador TRI ENEM",
@@ -37,19 +35,6 @@ st.markdown(
 
 html, body, [class*="css"] {
     font-family: "Segoe UI", sans-serif;
-}
-
-.main-title {
-    font-size: 2.8rem;
-    font-weight: 800;
-    color: #0F172A;
-    margin-bottom: 0.2rem;
-}
-
-.subtitle {
-    font-size: 1.05rem;
-    color: #334155;
-    margin-bottom: 1.5rem;
 }
 
 .section-card {
@@ -145,11 +130,7 @@ hr {
     margin: 1.5rem 0;
 }
 
-/* =========================
-   INPUTS MAIS VISÍVEIS
-========================= */
-
-/* INPUTS STREAMLIT (mais específico) */
+/* Inputs visíveis */
 div[data-baseweb="input"] input {
     background-color: #FFFFFF !important;
     border: 2px solid #64748B !important;
@@ -158,23 +139,42 @@ div[data-baseweb="input"] input {
     font-weight: 500;
 }
 
-/* SELECT */
 div[data-baseweb="select"] > div {
     background-color: #FFFFFF !important;
     border: 2px solid #64748B !important;
     border-radius: 10px !important;
 }
 
-/* FOCUS */
 div[data-baseweb="input"] input:focus {
     border: 2px solid #7C3AED !important;
     box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.25);
 }
 
-/* Labels */
 label {
     font-weight: 600 !important;
     color: #1E293B !important;
+}
+
+/* Cabeçalho */
+.header-box {
+    background: linear-gradient(135deg, #6D28D9, #7C3AED);
+    border-radius: 18px;
+    padding: 28px 32px;
+    color: white;
+    margin-bottom: 28px;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.15);
+}
+
+.header-title {
+    font-size: 2.2rem;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: 8px;
+}
+
+.header-subtitle {
+    font-size: 1rem;
+    opacity: 0.92;
 }
 </style>
 """,
@@ -340,34 +340,14 @@ def gerar_resumo_por_turma(resultados: pd.DataFrame) -> pd.DataFrame:
 
 
 def exibir_cabecalho() -> None:
-    components.html(
+    st.markdown(
         """
-<div style="
-    background: linear-gradient(135deg, #D1D5DB, #A78BFA, #7C3AED);
-    padding: 30px;
-    border-radius: 22px;
-    color: white;
-    margin-bottom: 24px;
-    box-shadow: 0 12px 28px rgba(124, 58, 237, 0.25);
-    font-family: 'Segoe UI', sans-serif;
-">
-    <div style="
-        font-size: 2.4rem;
-        font-weight: 800;
-        margin-bottom: 0.4rem;
-    ">
-        📘 Simulador TRI ENEM
-    </div>
-
-    <div style="
-        font-size: 1.05rem;
-        opacity: 0.96;
-    ">
-        Acompanhe resultados, evolução dos alunos e desempenho por turma.
-    </div>
+<div class="header-box">
+    <div class="header-title">Simulador TRI ENEM</div>
+    <div class="header-subtitle">Acompanhe resultados, evolução dos alunos e desempenho por turma.</div>
 </div>
 """,
-        height=170,
+        unsafe_allow_html=True,
     )
 
 
