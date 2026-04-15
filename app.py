@@ -5,7 +5,6 @@ import plotly.express as px
 from io import BytesIO
 
 ARQUIVO_BASE = "base_TRI_ENEM_FINAL_2021_2024_corrigida.xlsx"
-ARQUIVO_SAIDA = "resultados_alunos.xlsx"
 AREAS_VALIDAS = ["CN", "CH", "LC", "MT"]
 
 CORES_AREA = {
@@ -15,6 +14,11 @@ CORES_AREA = {
     "MT": "#F59E0B",
 }
 
+COLUNAS_RESULTADO = [
+    "Nome", "Turma", "Area", "Ano", "Acertos",
+    "Porcentagem_Acertos", "Nota_min", "Nota_media", "Nota_max"
+]
+
 st.set_page_config(
     page_title="Simulador TRI ENEM",
     page_icon="📘",
@@ -22,6 +26,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ==========================
+# ESTILO
+# ==========================
 st.markdown(
     """
 <style>
@@ -130,7 +137,7 @@ hr {
     margin: 1.5rem 0;
 }
 
-/* Inputs visíveis */
+/* INPUTS MAIS VISÍVEIS */
 div[data-baseweb="input"] input {
     background-color: #FFFFFF !important;
     border: 2px solid #64748B !important;
@@ -155,7 +162,7 @@ label {
     color: #1E293B !important;
 }
 
-/* Cabeçalho */
+/* CABEÇALHO */
 .header-box {
     background: linear-gradient(135deg, #6D28D9, #7C3AED);
     border-radius: 18px;
@@ -181,7 +188,15 @@ label {
     unsafe_allow_html=True,
 )
 
+# ==========================
+# ESTADO DA SESSÃO
+# ==========================
+if "resultados" not in st.session_state:
+    st.session_state["resultados"] = pd.DataFrame(columns=COLUNAS_RESULTADO)
 
+# ==========================
+# FUNÇÕES
+# ==========================
 @st.cache_data
 def carregar_base_tri(caminho_arquivo: str) -> pd.DataFrame:
     abas = pd.read_excel(caminho_arquivo, sheet_name=None)
@@ -198,38 +213,20 @@ def carregar_base_tri(caminho_arquivo: str) -> pd.DataFrame:
     return tri
 
 
-def carregar_resultados(caminho_arquivo: str) -> pd.DataFrame:
-    colunas = [
-        "Nome", "Turma", "Area", "Ano", "Acertos",
-        "Porcentagem_Acertos", "Nota_min", "Nota_media", "Nota_max",
-    ]
-
-    if Path(caminho_arquivo).exists():
-        df = pd.read_excel(caminho_arquivo)
-
-        for coluna in colunas:
-            if coluna not in df.columns:
-                df[coluna] = None
-
-        df = df[colunas].copy()
-        df["Nome"] = df["Nome"].astype(str).str.strip()
-        df["Turma"] = df["Turma"].astype(str).str.strip()
-        df["Area"] = df["Area"].astype(str).str.strip().str.upper()
-
-        return df
-
-    return pd.DataFrame(columns=colunas)
+def obter_resultados() -> pd.DataFrame:
+    return st.session_state["resultados"].copy()
 
 
-def salvar_resultado(caminho_arquivo: str, novo: dict) -> None:
-    resultados = carregar_resultados(caminho_arquivo)
+def salvar_resultado(novo: dict) -> None:
+    resultados = st.session_state["resultados"]
+    st.session_state["resultados"] = pd.concat(
+        [resultados, pd.DataFrame([novo])],
+        ignore_index=True
+    )
 
-    if resultados.empty:
-        resultados = pd.DataFrame([novo])
-    else:
-        resultados = pd.concat([resultados, pd.DataFrame([novo])], ignore_index=True)
 
-    resultados.to_excel(caminho_arquivo, index=False)
+def apagar_resultados() -> None:
+    st.session_state["resultados"] = pd.DataFrame(columns=COLUNAS_RESULTADO)
 
 
 def consultar_tri(tri: pd.DataFrame, area: str, ano: int, acertos: int) -> pd.DataFrame:
@@ -344,7 +341,10 @@ def exibir_cabecalho() -> None:
         """
 <div class="header-box">
     <div class="header-title">Simulador TRI ENEM</div>
-    <div class="header-subtitle">Acompanhe resultados, evolução dos alunos e desempenho por turma.</div>
+    <div class="header-subtitle">
+        Desenvolvido pela professora Maria Luiza Pertence.<br>
+        Plataforma para acompanhar resultados, evolução dos alunos e desempenho por turma no ENEM.
+    </div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -365,6 +365,16 @@ def exibir_badges_areas() -> None:
     )
 
 
+def excel_bytes(df: pd.DataFrame) -> BytesIO:
+    buffer = BytesIO()
+    df.to_excel(buffer, index=False, engine="openpyxl")
+    buffer.seek(0)
+    return buffer
+
+
+# ==========================
+# CARREGAMENTO DA BASE
+# ==========================
 try:
     tri = carregar_base_tri(ARQUIVO_BASE)
 except FileNotFoundError:
@@ -376,6 +386,9 @@ except Exception as e:
 
 anos_disponiveis = sorted([int(x) for x in tri["Ano"].dropna().unique()])
 
+# ==========================
+# SIDEBAR
+# ==========================
 with st.sidebar:
     st.markdown("## 📚 Menu")
     menu = st.selectbox(
@@ -399,10 +412,31 @@ with st.sidebar:
     st.markdown("### 📅 Anos")
     st.write(", ".join(map(str, anos_disponiveis)))
 
+    st.markdown("---")
+    st.markdown("### ⚙️ Sessão")
 
+    resultados_sidebar = obter_resultados()
+    st.write(f"Registros na sessão: **{len(resultados_sidebar)}**")
+
+    if not resultados_sidebar.empty:
+        st.download_button(
+            label="📥 Baixar resultados",
+            data=excel_bytes(resultados_sidebar),
+            file_name="resultados_alunos.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    if st.button("🗑️ Apagar todos os resultados"):
+        apagar_resultados()
+        st.success("Todos os resultados da sessão foram apagados.")
+        st.rerun()
+
+# ==========================
+# TELAS
+# ==========================
 if menu == "Início":
     exibir_cabecalho()
-    resultados = carregar_resultados(ARQUIVO_SAIDA)
+    resultados = obter_resultados()
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Áreas", "4")
@@ -496,13 +530,10 @@ elif menu == "Simulador":
             "Nota_max": None if pd.isna(linha["Max"]) else float(linha["Max"]),
         }
 
-        try:
-            salvar_resultado(ARQUIVO_SAIDA, novo)
-            st.success("Resultado salvo com sucesso.")
-        except Exception as e:
-            st.error(f"Erro ao salvar o resultado: {e}")
+        salvar_resultado(novo)
+        st.success("Resultado salvo com sucesso.")
 
-    resultados = carregar_resultados(ARQUIVO_SAIDA)
+    resultados = obter_resultados()
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Últimos resultados salvos")
 
@@ -516,7 +547,7 @@ elif menu == "Simulador":
 
 elif menu == "Buscar aluno":
     exibir_cabecalho()
-    resultados = carregar_resultados(ARQUIVO_SAIDA)
+    resultados = obter_resultados()
 
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Buscar aluno")
@@ -590,7 +621,7 @@ elif menu == "Buscar aluno":
 
 elif menu == "Resultado por turma":
     exibir_cabecalho()
-    resultados = carregar_resultados(ARQUIVO_SAIDA)
+    resultados = obter_resultados()
 
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Resultado por turma")
@@ -667,7 +698,7 @@ elif menu == "Resultado por turma":
 
 elif menu == "Resumo da turma":
     exibir_cabecalho()
-    resultados = carregar_resultados(ARQUIVO_SAIDA)
+    resultados = obter_resultados()
 
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Resumo da turma")
@@ -725,7 +756,7 @@ elif menu == "Resumo da turma":
 
 elif menu == "Alunos consolidados":
     exibir_cabecalho()
-    resultados = carregar_resultados(ARQUIVO_SAIDA)
+    resultados = obter_resultados()
 
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Alunos consolidados")
@@ -740,7 +771,7 @@ elif menu == "Alunos consolidados":
 
 elif menu == "Desempenho consolidado da turma":
     exibir_cabecalho()
-    resultados = carregar_resultados(ARQUIVO_SAIDA)
+    resultados = obter_resultados()
 
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Desempenho consolidado da turma")
@@ -773,7 +804,7 @@ elif menu == "Desempenho consolidado da turma":
 
 elif menu == "Histórico completo":
     exibir_cabecalho()
-    resultados = carregar_resultados(ARQUIVO_SAIDA)
+    resultados = obter_resultados()
 
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Histórico completo")
@@ -816,13 +847,9 @@ elif menu == "Histórico completo":
         df = df.sort_values(by=["Turma", "Nome", "Ano", "Area"])
         st.dataframe(df, use_container_width=True, hide_index=True)
 
-        buffer = BytesIO()
-        df.to_excel(buffer, index=False, engine="openpyxl")
-        buffer.seek(0)
-
         st.download_button(
-            label="Baixar histórico em Excel",
-            data=buffer,
+            label="📥 Baixar histórico filtrado",
+            data=excel_bytes(df),
             file_name="historico_filtrado.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
