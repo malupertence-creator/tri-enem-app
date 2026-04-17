@@ -1,11 +1,12 @@
 import pandas as pd
 import streamlit as st
-from pathlib import Path
 import plotly.express as px
 from io import BytesIO
 
 ARQUIVO_BASE = "base_TRI_ENEM_FINAL_2021_2024_corrigida.xlsx"
 AREAS_VALIDAS = ["CN", "CH", "LC", "MT"]
+MODO_OFICIAL = "Prova oficial"
+MODO_MISTO = "Simulado misto"
 
 CORES_AREA = {
     "CN": "#22C55E",
@@ -15,8 +16,8 @@ CORES_AREA = {
 }
 
 COLUNAS_RESULTADO = [
-    "Nome", "Turma", "Area", "Ano", "Acertos",
-    "Porcentagem_Acertos", "Nota_min", "Nota_media", "Nota_max"
+    "Nome", "Turma", "Area", "Tipo_Simulacao", "Ano", "Acertos",
+    "Porcentagem_Acertos", "Nota_min", "Nota_media", "Nota_max", "Observacao"
 ]
 
 st.set_page_config(
@@ -26,9 +27,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ==========================
-# ESTILO
-# ==========================
 st.markdown(
     """
 <style>
@@ -85,6 +83,39 @@ html, body, [class*="css"] {
     margin-bottom: 12px;
 }
 
+.metric-card-caption {
+    color: #475569;
+    font-size: 0.92rem;
+    margin-top: -6px;
+    margin-bottom: 10px;
+}
+
+.small-note {
+    color: #64748B;
+    font-size: 0.92rem;
+}
+
+.mode-pill {
+    display: inline-block;
+    padding: 0.35rem 0.8rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    background: #EDE9FE;
+    color: #5B21B6;
+    margin-bottom: 0.8rem;
+}
+
+.mode-pill-misto {
+    background: #FEF3C7;
+    color: #92400E;
+}
+
+.mode-pill-oficial {
+    background: #DBEAFE;
+    color: #1D4ED8;
+}
+
 div[data-testid="stMetric"] {
     background: #FFFFFF;
     border: 1.5px solid #C7D2FE;
@@ -137,7 +168,6 @@ hr {
     margin: 1.5rem 0;
 }
 
-/* INPUTS MAIS VISÍVEIS */
 div[data-baseweb="input"] input {
     background-color: #FFFFFF !important;
     border: 2px solid #64748B !important;
@@ -162,7 +192,6 @@ label {
     color: #1E293B !important;
 }
 
-/* CABEÇALHO */
 .header-box {
     background: linear-gradient(135deg, #6D28D9, #7C3AED);
     border-radius: 18px;
@@ -188,15 +217,10 @@ label {
     unsafe_allow_html=True,
 )
 
-# ==========================
-# ESTADO DA SESSÃO
-# ==========================
 if "resultados" not in st.session_state:
     st.session_state["resultados"] = pd.DataFrame(columns=COLUNAS_RESULTADO)
 
-# ==========================
-# FUNÇÕES
-# ==========================
+
 @st.cache_data
 def carregar_base_tri(caminho_arquivo: str) -> pd.DataFrame:
     abas = pd.read_excel(caminho_arquivo, sheet_name=None)
@@ -210,15 +234,20 @@ def carregar_base_tri(caminho_arquivo: str) -> pd.DataFrame:
     tri["Media"] = pd.to_numeric(tri["Media"], errors="coerce")
     tri["Max"] = pd.to_numeric(tri["Max"], errors="coerce")
 
+    tri = tri.dropna(subset=["Area", "Ano", "Acertos"])
     return tri
 
 
 def obter_resultados() -> pd.DataFrame:
-    return st.session_state["resultados"].copy()
+    resultados = st.session_state["resultados"].copy()
+    for coluna in COLUNAS_RESULTADO:
+        if coluna not in resultados.columns:
+            resultados[coluna] = None
+    return resultados[COLUNAS_RESULTADO].copy()
 
 
 def salvar_resultado(novo: dict) -> None:
-    resultados = st.session_state["resultados"]
+    resultados = obter_resultados()
     st.session_state["resultados"] = pd.concat(
         [resultados, pd.DataFrame([novo])],
         ignore_index=True
@@ -237,8 +266,65 @@ def consultar_tri(tri: pd.DataFrame, area: str, ano: int, acertos: int) -> pd.Da
     ]
 
 
+def consultar_estimativa_mista(tri: pd.DataFrame, area: str, acertos: int) -> pd.DataFrame:
+    return tri[
+        (tri["Area"] == area)
+        & (tri["Acertos"] == acertos)
+    ].copy()
+
+
+def consolidar_estimativa_mista(consulta: pd.DataFrame) -> dict | None:
+    if consulta.empty:
+        return None
+
+    anos_base = sorted(consulta["Ano"].dropna().astype(int).unique().tolist())
+    minimos = consulta["Min"].dropna()
+    medias = consulta["Media"].dropna()
+    maximos = consulta["Max"].dropna()
+
+    nota_min = float(minimos.min()) if not minimos.empty else None
+    nota_media = float(medias.mean()) if not medias.empty else None
+    nota_max = float(maximos.max()) if not maximos.empty else None
+    nota_provavel_inferior = float(medias.quantile(0.25)) if len(medias) >= 2 else nota_media
+    nota_provavel_superior = float(medias.quantile(0.75)) if len(medias) >= 2 else nota_media
+    mediana = float(medias.median()) if not medias.empty else nota_media
+
+    return {
+        "anos_base": anos_base,
+        "nota_min": nota_min,
+        "nota_media": nota_media,
+        "nota_max": nota_max,
+        "faixa_provavel_min": nota_provavel_inferior,
+        "faixa_provavel_max": nota_provavel_superior,
+        "mediana": mediana,
+        "amostras": len(consulta),
+    }
+
+
 def normalizar_nome(nome: str) -> str:
     return nome.strip().title()
+
+
+def ano_para_exibicao(valor) -> str:
+    if pd.isna(valor):
+        return "Misto"
+    try:
+        return str(int(valor))
+    except Exception:
+        return str(valor)
+
+
+def tipo_para_exibicao(valor: str) -> str:
+    if not valor:
+        return MODO_OFICIAL
+    return str(valor)
+
+
+def ordenar_resultados(df: pd.DataFrame) -> pd.DataFrame:
+    temp = df.copy()
+    temp["Ano_sort"] = pd.to_numeric(temp["Ano"], errors="coerce").fillna(9999)
+    temp = temp.sort_values(by=["Turma", "Nome", "Ano_sort", "Area", "Tipo_Simulacao"])
+    return temp.drop(columns=["Ano_sort"])
 
 
 def obter_melhor_resultado_por_aluno(df: pd.DataFrame) -> pd.DataFrame:
@@ -249,26 +335,27 @@ def obter_melhor_resultado_por_aluno(df: pd.DataFrame) -> pd.DataFrame:
     temp["Nome"] = temp["Nome"].astype(str).str.strip()
     temp["Turma"] = temp["Turma"].astype(str).str.strip()
     temp["Area"] = temp["Area"].astype(str).str.strip().str.upper()
+    temp["Ano_ordenacao"] = pd.to_numeric(temp["Ano"], errors="coerce").fillna(9999)
 
     melhor = (
         temp.sort_values(
-            by=["Nome", "Nota_media", "Acertos", "Ano"],
+            by=["Nome", "Nota_media", "Acertos", "Ano_ordenacao"],
             ascending=[True, False, False, False],
         )
         .groupby("Nome", as_index=False)
         .first()
     )
 
-    return melhor
+    return melhor.drop(columns=["Ano_ordenacao"])
 
 
 def obter_resumo_alunos(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(
             columns=[
-                "Nome", "Turma", "Qtd_Provas", "Melhor_Area", "Melhor_Ano",
+                "Nome", "Turma", "Qtd_Provas", "Melhor_Area", "Melhor_Modo", "Melhor_Ano",
                 "Melhor_Nota", "Media_Notas", "Media_Acertos",
-                "Ultimo_Ano", "Ultima_Area", "Ultima_Nota",
+                "Ultimo_Ano", "Ultima_Area", "Ultimo_Modo", "Ultima_Nota",
             ]
         )
 
@@ -276,18 +363,20 @@ def obter_resumo_alunos(df: pd.DataFrame) -> pd.DataFrame:
     temp["Nome"] = temp["Nome"].astype(str).str.strip()
     temp["Turma"] = temp["Turma"].astype(str).str.strip()
     temp["Area"] = temp["Area"].astype(str).str.strip().str.upper()
+    temp["Tipo_Simulacao"] = temp["Tipo_Simulacao"].fillna(MODO_OFICIAL)
+    temp["Ano_ordenacao"] = pd.to_numeric(temp["Ano"], errors="coerce").fillna(9999)
 
     linhas = []
 
     for nome, grupo in temp.groupby("Nome"):
-        grupo = grupo.sort_values(by=["Ano", "Area"])
+        grupo = grupo.sort_values(by=["Ano_ordenacao", "Area", "Tipo_Simulacao"])
 
         melhor = grupo.sort_values(
-            by=["Nota_media", "Acertos", "Ano"],
+            by=["Nota_media", "Acertos", "Ano_ordenacao"],
             ascending=[False, False, False],
         ).iloc[0]
 
-        ultimo = grupo.sort_values(by=["Ano", "Area"], ascending=[False, True]).iloc[0]
+        ultimo = grupo.sort_values(by=["Ano_ordenacao", "Area"], ascending=[False, True]).iloc[0]
 
         linhas.append(
             {
@@ -295,12 +384,14 @@ def obter_resumo_alunos(df: pd.DataFrame) -> pd.DataFrame:
                 "Turma": grupo.iloc[0]["Turma"],
                 "Qtd_Provas": len(grupo),
                 "Melhor_Area": melhor["Area"],
-                "Melhor_Ano": int(melhor["Ano"]),
+                "Melhor_Modo": melhor["Tipo_Simulacao"],
+                "Melhor_Ano": ano_para_exibicao(melhor["Ano"]),
                 "Melhor_Nota": round(float(melhor["Nota_media"]), 2),
                 "Media_Notas": round(float(grupo["Nota_media"].mean()), 2),
                 "Media_Acertos": round(float(grupo["Acertos"].mean()), 2),
-                "Ultimo_Ano": int(ultimo["Ano"]),
+                "Ultimo_Ano": ano_para_exibicao(ultimo["Ano"]),
                 "Ultima_Area": ultimo["Area"],
+                "Ultimo_Modo": ultimo["Tipo_Simulacao"],
                 "Ultima_Nota": round(float(ultimo["Nota_media"]), 2),
             }
         )
@@ -343,7 +434,6 @@ def exibir_cabecalho() -> None:
     <div class="header-title">Simulador TRI ENEM</div>
     <div class="header-subtitle">
         Desenvolvido pela professora Maria Luiza Pertence.<br>
-        Plataforma para acompanhar resultados, evolução dos alunos e desempenho por turma no ENEM.
     </div>
 </div>
 """,
@@ -372,9 +462,11 @@ def excel_bytes(df: pd.DataFrame) -> BytesIO:
     return buffer
 
 
-# ==========================
-# CARREGAMENTO DA BASE
-# ==========================
+def exibir_pill_modo(modo: str):
+    classe = "mode-pill-oficial" if modo == MODO_OFICIAL else "mode-pill-misto"
+    st.markdown(f'<div class="mode-pill {classe}">{modo}</div>', unsafe_allow_html=True)
+
+
 try:
     tri = carregar_base_tri(ARQUIVO_BASE)
 except FileNotFoundError:
@@ -386,9 +478,6 @@ except Exception as e:
 
 anos_disponiveis = sorted([int(x) for x in tri["Ano"].dropna().unique()])
 
-# ==========================
-# SIDEBAR
-# ==========================
 with st.sidebar:
     st.markdown("## 📚 Menu")
     menu = st.selectbox(
@@ -431,9 +520,6 @@ with st.sidebar:
         st.success("Todos os resultados da sessão foram apagados.")
         st.rerun()
 
-# ==========================
-# TELAS
-# ==========================
 if menu == "Início":
     exibir_cabecalho()
     resultados = obter_resultados()
@@ -442,13 +528,17 @@ if menu == "Início":
     c1.metric("Áreas", "4")
     c2.metric("Anos disponíveis", str(len(anos_disponiveis)))
     c3.metric("Registros salvos", str(len(resultados)))
-    c4.metric("Modo", "TRI ENEM")
+    c4.metric("Modos", "Oficial + Misto")
 
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Bem-vinda ao painel")
     st.write(
         "Use o menu lateral para simular resultados, buscar alunos, analisar turmas, "
         "comparar desempenhos e exportar históricos."
+    )
+    st.info(
+        "O modo oficial consulta um ano específico. O modo misto usa o histórico de vários anos "
+        "para gerar uma estimativa em escala ENEM baseada apenas na quantidade de acertos."
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -466,9 +556,15 @@ elif menu == "Simulador":
             nome = st.text_input("Nome do aluno")
             turma = st.text_input("Turma")
             area = st.selectbox("Área", AREAS_VALIDAS)
+            tipo_simulacao = st.radio("Modo de cálculo", [MODO_OFICIAL, MODO_MISTO], horizontal=True)
 
         with col2:
-            ano = st.selectbox("Ano da prova", anos_disponiveis)
+            if tipo_simulacao == MODO_OFICIAL:
+                ano = st.selectbox("Ano da prova", anos_disponiveis)
+            else:
+                ano = None
+                st.caption("No modo misto, o sistema ignora o ano e consolida os anos disponíveis.")
+
             acertos = st.number_input("Número de acertos", min_value=0, max_value=45, step=1)
 
         enviar = st.form_submit_button("Calcular e salvar")
@@ -483,52 +579,128 @@ elif menu == "Simulador":
             st.warning("Preencha nome e turma.")
             st.stop()
 
-        consulta = consultar_tri(tri, area, int(ano), int(acertos))
-
-        if consulta.empty:
-            areas_ano = sorted(
-                tri.loc[tri["Ano"] == int(ano), "Area"].dropna().unique().tolist()
-            )
-            st.error("Dados não encontrados para essa combinação.")
-            st.info(f"Áreas disponíveis para {ano}: {', '.join(areas_ano)}")
-            st.stop()
-
-        linha = consulta.iloc[0]
         porcentagem = round((int(acertos) / 45) * 100, 1)
 
-        st.markdown('<div class="section-card">', unsafe_allow_html=True)
-        st.subheader("Resultado estimado")
+        if tipo_simulacao == MODO_OFICIAL:
+            consulta = consultar_tri(tri, area, int(ano), int(acertos))
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Nota mínima", "-" if pd.isna(linha["Min"]) else f"{linha['Min']:.1f}")
-        c2.metric("Nota média", "-" if pd.isna(linha["Media"]) else f"{linha['Media']:.1f}")
-        c3.metric("Nota máxima", "-" if pd.isna(linha["Max"]) else f"{linha['Max']:.1f}")
+            if consulta.empty:
+                areas_ano = sorted(
+                    tri.loc[tri["Ano"] == int(ano), "Area"].dropna().unique().tolist()
+                )
+                st.error("Dados não encontrados para essa combinação.")
+                st.info(f"Áreas disponíveis para {ano}: {', '.join(areas_ano)}")
+                st.stop()
 
-        st.markdown("<br>", unsafe_allow_html=True)
+            linha = consulta.iloc[0]
+            nota_min = None if pd.isna(linha["Min"]) else float(linha["Min"])
+            nota_media = None if pd.isna(linha["Media"]) else float(linha["Media"])
+            nota_max = None if pd.isna(linha["Max"]) else float(linha["Max"])
+            observacao = f"Estimativa oficial baseada no ano {int(ano)}."
 
-        c4, c5, c6 = st.columns(3)
-        c4.metric("Área", area)
-        c5.metric("Ano", str(ano))
-        c6.metric("Acertos", f"{int(acertos)}/45")
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            exibir_pill_modo(MODO_OFICIAL)
+            st.subheader("Resultado estimado")
 
-        if porcentagem >= 60:
-            st.success(f"Porcentagem de acertos: {porcentagem:.1f}%")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Nota mínima", "-" if nota_min is None else f"{nota_min:.1f}")
+            c2.metric("Nota média", "-" if nota_media is None else f"{nota_media:.1f}")
+            c3.metric("Nota máxima", "-" if nota_max is None else f"{nota_max:.1f}")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            c4, c5, c6 = st.columns(3)
+            c4.metric("Área", area)
+            c5.metric("Ano", str(ano))
+            c6.metric("Acertos", f"{int(acertos)}/45")
+
+            if porcentagem >= 60:
+                st.success(f"Porcentagem de acertos: {porcentagem:.1f}%")
+            else:
+                st.warning(f"Porcentagem de acertos: {porcentagem:.1f}%")
+
+            st.caption(observacao)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            novo = {
+                "Nome": nome,
+                "Turma": turma,
+                "Area": area,
+                "Tipo_Simulacao": MODO_OFICIAL,
+                "Ano": int(ano),
+                "Acertos": int(acertos),
+                "Porcentagem_Acertos": porcentagem,
+                "Nota_min": nota_min,
+                "Nota_media": nota_media,
+                "Nota_max": nota_max,
+                "Observacao": observacao,
+            }
+
         else:
-            st.warning(f"Porcentagem de acertos: {porcentagem:.1f}%")
+            consulta_mista = consultar_estimativa_mista(tri, area, int(acertos))
+            consolidado = consolidar_estimativa_mista(consulta_mista)
 
-        st.markdown("</div>", unsafe_allow_html=True)
+            if not consolidado:
+                st.error("Não foi possível gerar estimativa mista para essa combinação.")
+                st.stop()
 
-        novo = {
-            "Nome": nome,
-            "Turma": turma,
-            "Area": area,
-            "Ano": int(ano),
-            "Acertos": int(acertos),
-            "Porcentagem_Acertos": porcentagem,
-            "Nota_min": None if pd.isna(linha["Min"]) else float(linha["Min"]),
-            "Nota_media": None if pd.isna(linha["Media"]) else float(linha["Media"]),
-            "Nota_max": None if pd.isna(linha["Max"]) else float(linha["Max"]),
-        }
+            nota_min = consolidado["nota_min"]
+            nota_media = consolidado["nota_media"]
+            nota_max = consolidado["nota_max"]
+            faixa_provavel_min = consolidado["faixa_provavel_min"]
+            faixa_provavel_max = consolidado["faixa_provavel_max"]
+            anos_base_txt = ", ".join(map(str, consolidado["anos_base"]))
+            observacao = (
+                "Estimativa mista baseada no histórico consolidado dos anos "
+                f"{anos_base_txt}. Não representa a TRI oficial de uma edição específica."
+            )
+
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            exibir_pill_modo(MODO_MISTO)
+            st.subheader("Resultado estimado")
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Nota mínima", "-" if nota_min is None else f"{nota_min:.1f}")
+            c2.metric("Nota média", "-" if nota_media is None else f"{nota_media:.1f}")
+            c3.metric("Nota máxima", "-" if nota_max is None else f"{nota_max:.1f}")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            c4, c5, c6 = st.columns(3)
+            c4.metric("Área", area)
+            c5.metric("Base histórica", anos_base_txt)
+            c6.metric("Acertos", f"{int(acertos)}/45")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            c7, c8 = st.columns(2)
+            c7.metric(
+                "Faixa provável",
+                "-" if faixa_provavel_min is None or faixa_provavel_max is None
+                else f"{faixa_provavel_min:.1f} a {faixa_provavel_max:.1f}"
+            )
+            c8.metric("Mediana histórica", "-" if consolidado["mediana"] is None else f"{consolidado['mediana']:.1f}")
+
+            if porcentagem >= 60:
+                st.success(f"Porcentagem de acertos: {porcentagem:.1f}%")
+            else:
+                st.warning(f"Porcentagem de acertos: {porcentagem:.1f}%")
+
+            st.caption(observacao)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            novo = {
+                "Nome": nome,
+                "Turma": turma,
+                "Area": area,
+                "Tipo_Simulacao": MODO_MISTO,
+                "Ano": None,
+                "Acertos": int(acertos),
+                "Porcentagem_Acertos": porcentagem,
+                "Nota_min": nota_min,
+                "Nota_media": nota_media,
+                "Nota_max": nota_max,
+                "Observacao": observacao,
+            }
 
         salvar_resultado(novo)
         st.success("Resultado salvo com sucesso.")
@@ -540,7 +712,8 @@ elif menu == "Simulador":
     if resultados.empty:
         st.info("Ainda não há resultados salvos.")
     else:
-        ultimos = resultados.sort_values(by=["Turma", "Nome", "Ano", "Area"]).tail(15)
+        ultimos = ordenar_resultados(resultados).tail(15).copy()
+        ultimos["Ano"] = ultimos["Ano"].apply(ano_para_exibicao)
         st.dataframe(ultimos, use_container_width=True, hide_index=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -571,15 +744,16 @@ elif menu == "Buscar aluno":
 
                 for aluno in alunos:
                     historico = filtro[filtro["Nome"] == aluno].copy()
-                    historico = historico.sort_values(by=["Ano", "Area"])
+                    historico["Ano_ordenacao"] = pd.to_numeric(historico["Ano"], errors="coerce").fillna(9999)
+                    historico = historico.sort_values(by=["Ano_ordenacao", "Area", "Tipo_Simulacao"]).drop(columns=["Ano_ordenacao"])
 
-                    melhor = historico.sort_values(
-                        by=["Nota_media", "Acertos", "Ano"],
+                    melhor = historico.assign(Ano_ordenacao=pd.to_numeric(historico["Ano"], errors="coerce").fillna(9999)).sort_values(
+                        by=["Nota_media", "Acertos", "Ano_ordenacao"],
                         ascending=[False, False, False],
                     ).iloc[0]
 
-                    ultimo = historico.sort_values(
-                        by=["Ano", "Area"], ascending=[False, True]
+                    ultimo = historico.assign(Ano_ordenacao=pd.to_numeric(historico["Ano"], errors="coerce").fillna(9999)).sort_values(
+                        by=["Ano_ordenacao", "Area"], ascending=[False, True]
                     ).iloc[0]
 
                     st.markdown(
@@ -603,15 +777,19 @@ elif menu == "Buscar aluno":
 
                     st.write(
                         f"**Melhor resultado:** {melhor['Nota_media']:.1f} "
-                        f"({melhor['Area']} - {int(melhor['Ano'])})"
+                        f"({melhor['Area']} - {ano_para_exibicao(melhor['Ano'])} - {tipo_para_exibicao(melhor['Tipo_Simulacao'])})"
                     )
                     st.write(
                         f"**Resultado mais recente:** {ultimo['Nota_media']:.1f} "
-                        f"({ultimo['Area']} - {int(ultimo['Ano'])})"
+                        f"({ultimo['Area']} - {ano_para_exibicao(ultimo['Ano'])} - {tipo_para_exibicao(ultimo['Tipo_Simulacao'])})"
                     )
 
+                    historico_exib = historico.copy()
+                    historico_exib["Ano"] = historico_exib["Ano"].apply(ano_para_exibicao)
                     st.dataframe(
-                        historico[["Area", "Ano", "Acertos", "Porcentagem_Acertos", "Nota_media"]],
+                        historico_exib[[
+                            "Tipo_Simulacao", "Area", "Ano", "Acertos", "Porcentagem_Acertos", "Nota_media"
+                        ]],
                         use_container_width=True,
                         hide_index=True,
                     )
@@ -648,6 +826,7 @@ elif menu == "Resultado por turma":
 
                 ranking.insert(0, "Posição", ranking.index + 1)
                 ranking["Medalha"] = ""
+                ranking["Ano"] = ranking["Ano"].apply(ano_para_exibicao)
 
                 if len(ranking) >= 1:
                     ranking.loc[0, "Medalha"] = "🥇"
@@ -659,7 +838,7 @@ elif menu == "Resultado por turma":
                 st.dataframe(
                     ranking[
                         [
-                            "Medalha", "Posição", "Nome", "Area", "Ano",
+                            "Medalha", "Posição", "Nome", "Tipo_Simulacao", "Area", "Ano",
                             "Acertos", "Porcentagem_Acertos", "Nota_media",
                         ]
                     ],
@@ -812,7 +991,7 @@ elif menu == "Histórico completo":
     if resultados.empty:
         st.info("Ainda não há resultados salvos.")
     else:
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             filtro_turma = st.selectbox(
@@ -827,10 +1006,16 @@ elif menu == "Histórico completo":
             )
 
         with col3:
+            filtro_modo = st.selectbox(
+                "Filtrar por modo",
+                ["Todos", MODO_OFICIAL, MODO_MISTO],
+            )
+
+        with col4:
             anos_hist = sorted(resultados["Ano"].dropna().astype(int).unique().tolist())
             filtro_ano = st.selectbox(
                 "Filtrar por ano",
-                ["Todos"] + anos_hist,
+                ["Todos", "Misto"] + anos_hist,
             )
 
         df = resultados.copy()
@@ -841,11 +1026,18 @@ elif menu == "Histórico completo":
         if filtro_area != "Todas":
             df = df[df["Area"] == filtro_area]
 
-        if filtro_ano != "Todos":
+        if filtro_modo != "Todos":
+            df = df[df["Tipo_Simulacao"] == filtro_modo]
+
+        if filtro_ano == "Misto":
+            df = df[df["Ano"].isna()]
+        elif filtro_ano != "Todos":
             df = df[df["Ano"] == filtro_ano]
 
-        df = df.sort_values(by=["Turma", "Nome", "Ano", "Area"])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        df = ordenar_resultados(df)
+        df_exib = df.copy()
+        df_exib["Ano"] = df_exib["Ano"].apply(ano_para_exibicao)
+        st.dataframe(df_exib, use_container_width=True, hide_index=True)
 
         st.download_button(
             label="📥 Baixar histórico filtrado",
